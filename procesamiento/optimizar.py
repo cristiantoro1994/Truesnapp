@@ -1,234 +1,115 @@
-# Funciones para mejorar imágenes usando OpenCV (sin IA).
+# =====================================================================
+# procesamiento/optimizar.py
+# =====================================================================
+# Pipeline de optimización de imágenes basado en OpenCV.
 #
-# Esta es la CAPA 1 del sistema híbrido de optimización de TrueSnapp.
-# Se aplica SIEMPRE a cada foto, garantizando una mejora visible
-# aunque la capa de IA externa (Replicate) no esté disponible.
-# Operaciones que realiza:
-#   1. Ajuste automático de brillo y contraste (CLAHE)
-#   2. Balance de color automático (gray world)
-#   3. Mejora de nitidez (afilado de bordes)
-#   4. Reducción de ruido suave
-#   5. Escritura atómica con validación (Paso 7)
+# Funciones individuales:
+#   - leer_imagen:                 abre una imagen del disco
+#   - guardar_imagen_cv:           guarda una imagen en disco con escritura atómica
+#   - reducir_ruido:               reducción de ruido NLM (Non-Local Means)
+#   - balancear_color:             balance de blancos automático (Gray World)
+#   - ajustar_brillo_contraste:    CLAHE en canal L (espacio LAB)
+#   - mejorar_nitidez:             unsharp masking
+#
+# Pipeline central:
+#   - optimizar_imagen_opencv:     aplica todas las mejoras secuenciales
+#   - optimizar_archivo:           lee, optimiza y guarda en una sola operación
+#
+# Funciones de Fase 6 (Paso 7):
+#   - aplicar_marca_de_agua:       marca "TrueSnapp" en esquina inferior derecha
+# =====================================================================
+
+import cv2
+import numpy as np
+from pathlib import Path
 
 
-import cv2          # OpenCV: procesamiento de imágenes
-import numpy as np  # NumPy: operaciones con matrices
-
-
-# 1. Lectura y escritura de imágenes
-
+# =====================================================================
+# 1. LECTURA Y ESCRITURA DE IMÁGENES
+# =====================================================================
 
 def leer_imagen(ruta):
     """
-    Lee una imagen del disco usando OpenCV.
+    Lee una imagen desde disco soportando rutas con caracteres especiales
+    (acentos, ñ, etc.) que cv2.imread no maneja bien en Windows.
 
-    Parámetros:
-      ruta: ruta del archivo (Path o string).
-
-    Devuelve la imagen como una matriz de NumPy.
-    Si no se puede leer, devuelve None.
+    Devuelve la imagen como array de OpenCV (BGR), o None si falla.
     """
-    # Convertimos la ruta a string por si llega como Path
-    imagen = cv2.imread(str(ruta))
-    return imagen
+    try:
+        ruta = Path(ruta)
+        if not ruta.exists():
+            return None
+
+        # Lectura por bytes + decode para soportar acentos en la ruta
+        with open(ruta, "rb") as f:
+            datos = np.frombuffer(f.read(), dtype=np.uint8)
+
+        imagen = cv2.imdecode(datos, cv2.IMREAD_COLOR)
+        return imagen
+    except Exception:
+        return None
 
 
 def guardar_imagen_cv(imagen, ruta):
     """
-    Guarda una matriz de imagen (NumPy) en el disco usando OpenCV.
+    Guarda una imagen en disco con escritura atómica.
 
-    Implementa ESCRITURA ATÓMICA + VALIDACIÓN para garantizar la
-    integridad del archivo:
-      1. Escribe primero a un archivo temporal con sufijo .tmp.[ext].
-      2. Comprueba que el archivo temporal es válido (se puede leer).
-      3. Solo si la validación pasa, renombra al nombre final.
-      4. Si algo falla, limpia el archivo temporal.
+    Escritura atómica:
+      1. Escribe primero en un archivo temporal (.tmp.jpg).
+      2. Solo cuando se ha escrito todo, renombra al nombre final.
+    Esto evita que un fallo a mitad deje un archivo corrupto.
 
-    Resultado: nunca queda un archivo corrupto en el destino final.
-    O todo, o nada.
-
-    IMPORTANTE: esta función es solo para imágenes ya procesadas
-    (matrices NumPy). Para guardar archivos subidos por el usuario,
-    usa la función guardar_imagen() de utils/helpers.py.
-
-    Parámetros:
-      imagen: matriz NumPy con la imagen.
-      ruta: ruta donde guardar el archivo (Path o string).
-
-    Devuelve True si todo salió bien, False si hubo algún problema.
+    IMPORTANTE: el archivo temporal lleva la extensión real al final
+    (.tmp.jpg, .tmp.png) porque OpenCV identifica el formato por la
+    extensión. Si fuera ".jpg.tmp", cv2.imencode fallaría.
     """
-    from pathlib import Path
-
-    # Convertimos a Path para poder operar con él
-    ruta_final = Path(ruta)
-
-    # Ruta temporal: insertamos ".tmp" ANTES de la extensión.
-    # Importante: OpenCV decide el formato a guardar mirando la
-    # extensión del archivo (.jpg, .png, etc.). Por eso la extensión
-    # real (.jpg, .png) debe quedar al final del nombre.
-    # Ejemplo: foto.jpg → foto.tmp.jpg (OpenCV reconoce .jpg)
-    ruta_temporal = ruta_final.with_name(
-        ruta_final.stem + ".tmp" + ruta_final.suffix
-    )
-
-    #  1. Escribir al archivo temporal 
-    parametros = [cv2.IMWRITE_JPEG_QUALITY, 95]
-    exito_escritura = cv2.imwrite(str(ruta_temporal), imagen, parametros)
-
-    if not exito_escritura:
-        # OpenCV no pudo escribir el archivo
-        # Intentamos limpiar por si dejó algo a medias
-        if ruta_temporal.exists():
-            ruta_temporal.unlink()
+    if imagen is None:
         return False
 
-    # 2. Validar que el archivo temporal se puede leer 
-    imagen_validacion = cv2.imread(str(ruta_temporal))
+    try:
+        ruta = Path(ruta)
 
-    if imagen_validacion is None:
-        # El archivo se escribió pero no se puede leer 
-        if ruta_temporal.exists():
-            ruta_temporal.unlink()
+        # Aseguramos que la carpeta destino existe
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+
+        # Construimos el nombre temporal: nombre.tmp.ext
+        extension = ruta.suffix
+        ruta_tmp = ruta.with_name(ruta.stem + ".tmp" + extension)
+
+        # Codificamos la imagen al formato correspondiente
+        exito, datos = cv2.imencode(extension, imagen)
+        if not exito:
+            return False
+
+        # Escribimos los bytes al archivo temporal
+        with open(ruta_tmp, "wb") as f:
+            f.write(datos.tobytes())
+
+        # Si el archivo final ya existe, lo borramos antes del rename
+        # (Windows no permite overwrite con rename)
+        if ruta.exists():
+            ruta.unlink()
+
+        # Renombrado atómico
+        ruta_tmp.rename(ruta)
+
+        return True
+    except Exception:
         return False
 
-    #  3. Renombrar el .tmp al nombre final
-    # Si ya existía un archivo final previo, lo borramos primero
-    if ruta_final.exists():
-        ruta_final.unlink()
 
-    # rename() es una operación atómica en sistemas de archivos:
-    # o se hace por completo, o no se hace.
-    ruta_temporal.rename(ruta_final)
-
-    return True
-
-
-# 2. Ajuste de brillo y contraste con CLAHE
-
-
-def ajustar_brillo_contraste(imagen):
-    """
-    Mejora el brillo y contraste de la imagen usando CLAHE.
-
-    CLAHE (Contrast Limited Adaptive Histogram Equalization) ajusta
-    el contraste por zonas pequeñas, lo que funciona mucho mejor que
-    un ajuste global. Es ideal para fotos de interiores con luz
-    desigual (típicas de alojamientos turísticos).
-
-    Trabajamos en el espacio de color LAB para no alterar los colores,
-    solo la luminosidad.
-    """
-    # Convertimos de BGR (formato OpenCV) a LAB
-    # En LAB: L = luminosidad, A = verde-rojo, B = azul-amarillo
-    lab = cv2.cvtColor(imagen, cv2.COLOR_BGR2LAB)
-
-    # Separamos los tres canales
-    canal_l, canal_a, canal_b = cv2.split(lab)
-
-    # Creamos el algoritmo CLAHE
-    # clipLimit: cuánto contraste aplicar (2.0 = moderado, no exagera)
-    # tileGridSize: en cuántas zonas se divide la imagen (8x8 = estándar)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-
-    # Aplicamos CLAHE solo al canal L (luminosidad)
-    canal_l_mejorado = clahe.apply(canal_l)
-
-    # Volvemos a unir los tres canales
-    lab_mejorado = cv2.merge((canal_l_mejorado, canal_a, canal_b))
-
-    # Convertimos de vuelta a BGR
-    imagen_mejorada = cv2.cvtColor(lab_mejorado, cv2.COLOR_LAB2BGR)
-
-    return imagen_mejorada
-
-
-# 3. Balance de color automático (Gray World)
-
-
-def balancear_color(imagen):
-    """
-    Corrige tonos amarillentos o azulados usando el algoritmo
-    'Gray World' (mundo gris).
-
-    Idea: si la foto tuviera colores neutros, el promedio de cada
-    canal (R, G, B) debería ser similar. Si uno destaca mucho, hay
-    una dominante de color. Esta función equilibra los tres canales.
-    """
-    # Convertimos a float para hacer cálculos sin perder precisión
-    imagen_float = imagen.astype(np.float32)
-
-    # Calculamos el promedio de cada canal (B, G, R en OpenCV)
-    promedio_b = np.mean(imagen_float[:, :, 0])
-    promedio_g = np.mean(imagen_float[:, :, 1])
-    promedio_r = np.mean(imagen_float[:, :, 2])
-
-    # Promedio gris ideal: la media de los tres canales
-    promedio_gris = (promedio_b + promedio_g + promedio_r) / 3
-
-    # Calculamos el factor de corrección para cada canal
-    # Si un canal está por debajo del gris ideal, lo subimos.
-    # Si está por encima, lo bajamos.
-    factor_b = promedio_gris / promedio_b if promedio_b > 0 else 1
-    factor_g = promedio_gris / promedio_g if promedio_g > 0 else 1
-    factor_r = promedio_gris / promedio_r if promedio_r > 0 else 1
-
-    # Aplicamos los factores a cada canal
-    imagen_float[:, :, 0] *= factor_b
-    imagen_float[:, :, 1] *= factor_g
-    imagen_float[:, :, 2] *= factor_r
-
-    # Aseguramos que los valores se queden entre 0 y 255 (rango válido)
-    imagen_balanceada = np.clip(imagen_float, 0, 255).astype(np.uint8)
-
-    return imagen_balanceada
-
-
-
-# 4. Mejora de nitidez (afilado de bordes)
-
-
-def mejorar_nitidez(imagen):
-    """
-    Realza los bordes y detalles de la imagen para que se vea
-    más nítida. Usa la técnica de 'unsharp masking', que es
-    el estándar profesional.
-
-    Funciona así:
-      1. Crea una versión borrosa de la imagen.
-      2. Resta esa versión borrosa de la original.
-      3. Ese resultado son SOLO los bordes y detalles.
-      4. Suma los detalles de vuelta a la original con peso.
-    """
-    # Creamos una versión ligeramente borrosa (Gaussian blur)
-    # (5, 5) es el tamaño del filtro; valores más grandes = más borroso
-    imagen_borrosa = cv2.GaussianBlur(imagen, (5, 5), 1.5)
-
-    # Combinamos la imagen original con la borrosa
-    # Fórmula: (1.5 * original) - (0.5 * borrosa) = imagen con bordes realzados
-    # 1.5 y -0.5 son los pesos; suman 1 para no cambiar la luminosidad
-    imagen_nitida = cv2.addWeighted(imagen, 1.5, imagen_borrosa, -0.5, 0)
-
-    return imagen_nitida
-
-
-
-# 5. Reducción de ruido suave
-
+# =====================================================================
+# 2. ALGORITMOS DE OPTIMIZACIÓN (FASE 4)
+# =====================================================================
 
 def reducir_ruido(imagen):
     """
-    Reduce el ruido (grano) de la imagen sin perder demasiado detalle.
-    Útil para fotos hechas con poca luz o con teléfonos antiguos.
+    Reducción de ruido con NLM (Non-Local Means).
 
-    Usamos 'Non-Local Means', un algoritmo que sabe distinguir entre
-    bordes reales y ruido aleatorio.
+    h=10 es un valor moderado: limpia el ruido sin eliminar
+    detalles importantes (texturas, granos finos).
     """
-    # Parámetros ajustados para una reducción suave:
-    #   h = 10: fuerza de la reducción de ruido (10 es moderado)
-    #   hColor = 10: igual pero para los colores
-    #   templateWindowSize = 7: tamaño de las ventanas de comparación
-    #   searchWindowSize = 21: tamaño del área de búsqueda
-    imagen_limpia = cv2.fastNlMeansDenoisingColored(
+    return cv2.fastNlMeansDenoisingColored(
         imagen,
         None,
         h=10,
@@ -237,79 +118,222 @@ def reducir_ruido(imagen):
         searchWindowSize=21,
     )
 
-    return imagen_limpia
 
-
-
-# 6. PIPELINE CENTRAL DE OPTIMIZACIÓN
-
-# Función principal que combina todas las mejoras en una sola llamada.
-
-
-
-def optimizar_imagen_opencv(imagen, aplicar_reduccion_ruido=True):
+def balancear_color(imagen):
     """
-    Aplica todas las mejoras de OpenCV a una imagen, en el orden óptimo.
+    Balance de blancos automático (Gray World).
 
-    Esta función es la CAPA 1 del sistema híbrido de TrueSnapp.
-    Se aplica SIEMPRE (con o sin Replicate disponible).
-
-    Parámetros:
-      imagen: matriz NumPy con la imagen original (formato BGR de OpenCV).
-      aplicar_reduccion_ruido: si True, aplica reducción de ruido.
-                               Es la operación más lenta del pipeline.
-
-    Devuelve la imagen optimizada como matriz NumPy.
-
-    Orden de aplicación (importante, no cambiar):
-      1. Reducción de ruido    → limpia el grano
-      2. Balance de color      → corrige tonos
-      3. Brillo y contraste    → mejora la luminosidad
-      4. Nitidez               → realza los bordes
+    Asume que la media de cada canal de color debería ser
+    aproximadamente igual. Corrige dominantes de color (ej:
+    amarillento de bombillas, azulado de día nublado).
     """
+    resultado = imagen.astype(np.float32)
 
-    # Hacemos una copia para no modificar la imagen original
-    imagen_actual = imagen.copy()
+    # Media de cada canal (B, G, R)
+    media_b = np.mean(resultado[:, :, 0])
+    media_g = np.mean(resultado[:, :, 1])
+    media_r = np.mean(resultado[:, :, 2])
 
-    #  PASO 1: Reducción de ruido 
-    if aplicar_reduccion_ruido:
-        imagen_actual = reducir_ruido(imagen_actual)
+    # Media global de la imagen
+    media_global = (media_b + media_g + media_r) / 3.0
 
-    #  PASO 2: Balance de color 
-    imagen_actual = balancear_color(imagen_actual)
+    # Aplicamos el factor de corrección a cada canal
+    if media_b > 0:
+        resultado[:, :, 0] *= media_global / media_b
+    if media_g > 0:
+        resultado[:, :, 1] *= media_global / media_g
+    if media_r > 0:
+        resultado[:, :, 2] *= media_global / media_r
 
-    #  PASO 3: Brillo y contraste con CLAHE 
-    imagen_actual = ajustar_brillo_contraste(imagen_actual)
-
-    #  PASO 4: Nitidez 
-    imagen_actual = mejorar_nitidez(imagen_actual)
-
-    return imagen_actual
+    # Recortamos al rango válido [0, 255] y volvemos a uint8
+    resultado = np.clip(resultado, 0, 255).astype(np.uint8)
+    return resultado
 
 
-def optimizar_archivo(ruta_origen, ruta_destino, aplicar_reduccion_ruido=True):
+def ajustar_brillo_contraste(imagen):
     """
-    Versión "todo en uno" para procesar un archivo del disco.
+    Ajuste de brillo y contraste con CLAHE en el canal L.
 
-    Lee la imagen, la optimiza, y la guarda con escritura atómica.
-
-    Devuelve True si todo salió bien, False si hubo algún problema
-    (lectura, procesamiento o guardado).
+    CLAHE (Contrast Limited Adaptive Histogram Equalization) trabaja
+    en el espacio LAB para no alterar los colores, y aplica el ajuste
+    por zonas locales en lugar de globalmente. Resultados naturales
+    sin "saturación falsa".
     """
+    # Convertimos BGR -> LAB
+    lab = cv2.cvtColor(imagen, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
 
-    #  1. Leemos la imagen original 
+    # CLAHE solo en el canal de luminosidad (L)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l_mejorado = clahe.apply(l)
+
+    # Recombinamos y volvemos a BGR
+    lab_mejorado = cv2.merge([l_mejorado, a, b])
+    resultado = cv2.cvtColor(lab_mejorado, cv2.COLOR_LAB2BGR)
+    return resultado
+
+
+def mejorar_nitidez(imagen):
+    """
+    Mejora de nitidez con unsharp masking.
+
+    Es la técnica clásica usada en Photoshop, Lightroom, etc.:
+      1. Crea una versión borrosa de la imagen.
+      2. La resta de la original (resaltando los bordes).
+      3. Suma el resultado a la original.
+    """
+    # Versión borrosa (blur gaussiano)
+    borrosa = cv2.GaussianBlur(imagen, (0, 0), sigmaX=2.0)
+
+    # Combinación: original * 1.5 - borrosa * 0.5
+    resultado = cv2.addWeighted(imagen, 1.5, borrosa, -0.5, 0)
+    return resultado
+
+
+# =====================================================================
+# 3. PIPELINE CENTRAL
+# =====================================================================
+
+def optimizar_imagen_opencv(imagen):
+    """
+    Aplica el pipeline completo de OpenCV en orden:
+      1. Reducción de ruido (limpieza primero, antes de realzar)
+      2. Balance de color (corrección de dominantes)
+      3. Brillo/contraste (CLAHE)
+      4. Nitidez (último: realza los detalles ya corregidos)
+    """
+    if imagen is None:
+        return None
+
+    imagen = reducir_ruido(imagen)
+    imagen = balancear_color(imagen)
+    imagen = ajustar_brillo_contraste(imagen)
+    imagen = mejorar_nitidez(imagen)
+    return imagen
+
+
+def optimizar_archivo(ruta_origen, ruta_destino):
+    """
+    Lee, optimiza y guarda en una sola llamada.
+    Útil para automatizar fuera del flujo de la galería.
+    """
     imagen = leer_imagen(ruta_origen)
-
-    # Si no se pudo leer, abandonamos
     if imagen is None:
         return False
 
-    #  2. Aplicamos el pipeline de optimización 
-    imagen_optimizada = optimizar_imagen_opencv(
-        imagen,
-        aplicar_reduccion_ruido=aplicar_reduccion_ruido,
-    )
+    optimizada = optimizar_imagen_opencv(imagen)
+    if optimizada is None:
+        return False
 
-    #  3. Guardamos la imagen optimizada 
-    # guardar_imagen_cv ahora devuelve True/False según si tuvo éxito
-    return guardar_imagen_cv(imagen_optimizada, ruta_destino)
+    return guardar_imagen_cv(optimizada, ruta_destino)
+
+
+# =====================================================================
+# 4. MARCA DE AGUA "TrueSnapp" (FASE 6 - PASO 7)
+# =====================================================================
+# Aplica una marca de agua con el nombre de la app en la esquina
+# inferior derecha de la imagen optimizada.
+#
+# Implementación: OpenCV nativo (cv2.putText).
+# - No depende de fuentes del sistema (en Windows con Python 3.14
+#   las fuentes TrueType pueden fallar al cargarse).
+# - Más rápido que PIL.
+# - Funciona en cualquier sistema operativo, incluido Streamlit Cloud.
+#
+# Decisiones de diseño:
+#   - Solo se aplica a la versión optimizada (no a la original).
+#   - El tamaño es proporcional al ancho de la imagen para que se
+#     vea bien tanto en fotos pequeñas como grandes.
+#   - Texto blanco con sombra negra para legibilidad en cualquier fondo.
+# =====================================================================
+
+TEXTO_MARCA = "TrueSnapp"
+
+# Proporción del texto respecto al ancho de la imagen
+# Para imágenes de 1000px de ancho → escala ~1.8 (legible)
+# Para imágenes de 4000px de ancho → escala ~7.2 (legible)
+PROPORCION_TEXTO = 0.0018
+
+# Margen desde los bordes (2.5% del ancho)
+PROPORCION_MARGEN = 0.025
+
+
+def aplicar_marca_de_agua(imagen_cv):
+    """
+    Aplica la marca de agua "TrueSnapp" a una imagen.
+
+    Recibe la imagen en formato OpenCV (BGR) y devuelve la imagen
+    con la marca aplicada en formato OpenCV.
+
+    Estrategia:
+      1. Calcula tamaño de fuente proporcional al ancho.
+      2. Calcula posición en la esquina inferior derecha.
+      3. Dibuja la sombra (texto negro desplazado).
+      4. Dibuja el texto principal blanco encima.
+
+    Devuelve:
+      - Imagen OpenCV con la marca aplicada (numpy array, BGR).
+      - La imagen original sin cambios si hay error.
+    """
+    if imagen_cv is None:
+        return imagen_cv
+
+    try:
+        # Trabajamos sobre una copia para no modificar el original
+        imagen = imagen_cv.copy()
+        alto, ancho = imagen.shape[:2]
+
+        # ----- 1. Configurar fuente y tamaño -----
+        # Fuente nativa de OpenCV (siempre disponible)
+        fuente = cv2.FONT_HERSHEY_SIMPLEX
+
+        # Tamaño proporcional al ancho de la imagen
+        escala = max(ancho * PROPORCION_TEXTO, 0.8)
+
+        # Grosor proporcional a la escala
+        grosor = max(int(escala * 1.5), 2)
+
+        # ----- 2. Medir el texto -----
+        (ancho_texto, alto_texto), _ = cv2.getTextSize(
+            TEXTO_MARCA,
+            fuente,
+            escala,
+            grosor,
+        )
+
+        # ----- 3. Calcular posición (esquina inferior derecha) -----
+        margen = int(ancho * PROPORCION_MARGEN)
+        x = ancho - ancho_texto - margen
+        y = alto - margen  # En OpenCV, y es la línea base del texto
+
+        # ----- 4. Dibujar la sombra (negro, desplazada) -----
+        # Hace que el texto se vea bien en cualquier fondo
+        desplazamiento = max(int(escala), 1)
+        cv2.putText(
+            imagen,
+            TEXTO_MARCA,
+            (x + desplazamiento, y + desplazamiento),
+            fuente,
+            escala,
+            (0, 0, 0),  # Negro en BGR
+            grosor + 1,
+            cv2.LINE_AA,
+        )
+
+        # ----- 5. Dibujar el texto principal (blanco) -----
+        cv2.putText(
+            imagen,
+            TEXTO_MARCA,
+            (x, y),
+            fuente,
+            escala,
+            (255, 255, 255),  # Blanco en BGR
+            grosor,
+            cv2.LINE_AA,
+        )
+
+        return imagen
+
+    except Exception as error:
+        print(f"[Marca de agua] Error: {error}")
+        return imagen_cv

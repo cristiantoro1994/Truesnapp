@@ -36,3 +36,6 @@ Thumbs.db
 # --- Variables de entorno con claves privadas ---
 .env
 *.env
+
+# Base de datos local 
+datos/truesnapp.db

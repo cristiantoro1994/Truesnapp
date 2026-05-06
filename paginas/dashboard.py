@@ -1,195 +1,206 @@
-# Panel principal del usuario (corazón de TrueSnapp).
-# Desde aquí el usuario:
-#   - Ve sus proyectos activos 
-#   - Crea nuevos proyectos
-#   - Abre la galería de un proyecto
-#   - Elimina proyectos (con doble confirmación)
-#   - Cierra sesión
+# Pantalla principal del usuario tras iniciar sesión.
+# Muestra:
+#   - Saludo personalizado con el nombre real del usuario.
+#   - Botón "Nuevo proyecto".
+#   - Tarjetas con los proyectos del usuario (leídos de la BD).
+#   - Contadores reales por proyecto (fotos, optimizadas, certificadas).
+#   - Botón "Cerrar sesión".
+# IMPORTANTE: solo se muestran los proyectos del usuario actual,
+# filtrando por usuario_id en la base de datos.
 
 
 import streamlit as st
-import shutil  # Para borrar carpetas con su contenido
+import shutil
 
-# Funciones auxiliares
 from utils.helpers import (
     listar_imagenes,
     carpeta_proyecto,
     existe_version_optimizada,
     existe_certificado,
+    cerrar_sesion,
+)
+from utils.proyectos import (
+    listar_proyectos_usuario,
+    eliminar_proyecto,
+    obtener_proyecto,
 )
 
+
 def mostrar():
-    """Muestra el dashboard principal con los proyectos del usuario."""
+    """Muestra el dashboard con los proyectos del usuario actual."""
 
-    # Inicializar la lista de proyectos VACÍA si todavía no existe
-   
-    if "proyectos" not in st.session_state:
-        st.session_state.proyectos = []
+    #  Verificación de sesión 
+    usuario_id = st.session_state.get("usuario_id")
+    if usuario_id is None:
+        st.warning("Debes iniciar sesión.")
+        cerrar_sesion()
+        st.rerun()
+        return
 
-    # Cabecera: saludo + botón de cerrar sesión
-  
-    columna_saludo, columna_salir = st.columns([3, 1])
+    # Cabecera con saludo y cerrar sesión 
+    cols_cabecera = st.columns([4, 1])
 
-    with columna_saludo:
-        email = st.session_state.get("email_usuario", "Usuario")
-        nombre_corto = email.split("@")[0] if "@" in email else email
-        st.markdown(f"### 👋 Hola, **{nombre_corto}**")
+    with cols_cabecera[0]:
+        nombre = st.session_state.get("usuario_nombre", "")
+        st.markdown(f"## 👋 Hola, **{nombre}**")
 
-    with columna_salir:
-        if st.button("Salir", key="boton_salir"):
-            # Limpiamos cualquier confirmación pendiente al cerrar sesión
-            st.session_state.proyecto_a_borrar = None
-            st.session_state.usuario_logueado = False
-            st.session_state.email_usuario = ""
-            st.session_state.pagina = "login"
+    with cols_cabecera[1]:
+        if st.button(
+            "🚪 Salir",
+            key="boton_cerrar_sesion",
+            use_container_width=True,
+        ):
+            cerrar_sesion()
             st.rerun()
 
     st.markdown("---")
 
-   
-    # Título de la sección
-   
-    st.markdown("## 📂 Mis proyectos")
+    #  Sección "Mis proyectos" 
+    st.markdown("### 📁 Mis proyectos")
 
-    
-    # Botón principal: crear nuevo proyecto
-   
-    if st.button("➕ Nuevo proyecto", key="boton_nuevo_proyecto"):
-        st.session_state.proyecto_a_borrar = None  # cancela confirmaciones
+    # Botón para crear un proyecto nuevo
+    if st.button(
+        "➕ Nuevo proyecto",
+        key="boton_nuevo_proyecto",
+        type="primary",
+    ):
         st.session_state.pagina = "nuevo_proyecto"
         st.rerun()
 
-    st.write("")  # Espacio antes de las tarjetas
+    st.markdown("")
 
-    # Lista de tarjetas de proyectos
-   
-    if len(st.session_state.proyectos) == 0:
-        st.info(
-            "Aún no tienes proyectos. Pulsa **➕ Nuevo proyecto** "
-            "para empezar."
+    #  Lista de proyectos del usuario 
+    proyectos = listar_proyectos_usuario(usuario_id)
+
+    if not proyectos:
+        st.markdown(
+            "<div style='text-align: center; padding: 2rem; "
+            "background-color: #F8F9FA; border-radius: 10px; "
+            "border: 1px solid #E1E4E8; margin-top: 1rem;'>"
+            "<p style='font-size: 1.1rem; color: #2C3E50; margin-bottom: 0.5rem;'>"
+            "🌱 <strong>Empieza tu primer proyecto</strong></p>"
+            "<p style='color: #7F8C8D; margin: 0;'>"
+            "Crea un proyecto para cada alojamiento que quieras gestionar. "
+            "Por ejemplo: <em>Casa Playa</em>, <em>Apartamento Centro</em>...</p>"
+            "</div>",
+            unsafe_allow_html=True,
         )
-    else:
-        for proyecto in st.session_state.proyectos:
-            mostrar_tarjeta_proyecto(proyecto)
+        return
+
+    # Mostramos cada proyecto como una tarjeta
+    for proyecto in proyectos:
+        mostrar_tarjeta_proyecto(proyecto, usuario_id)
 
 
-def mostrar_tarjeta_proyecto(proyecto):
+def mostrar_tarjeta_proyecto(proyecto, usuario_id):
     """
-    Dibuja una tarjeta visual para un proyecto.
-    Si está pendiente de confirmación, muestra el modo borrado.
+    Muestra la tarjeta de un proyecto con:
+      - Nombre del proyecto.
+      - Contadores reales (fotos, optimizadas, certificadas).
+      - Botón "Abrir" → galería.
+      - Botón "🗑️" → eliminar (con confirmación).
     """
-    # ¿Esta tarjeta está esperando confirmación de borrado?
-    proyecto_pendiente = st.session_state.get("proyecto_a_borrar", None)
+    proyecto_id = proyecto["id"]
 
-    if proyecto_pendiente == proyecto["id"]:
-        # Modo confirmación
-        mostrar_tarjeta_modo_borrar(proyecto)
-    else:
-        # Modo normal
-        mostrar_tarjeta_modo_normal(proyecto)
-
-
-def mostrar_tarjeta_modo_normal(proyecto):
-    """Tarjeta normal con botones Abrir y 🗑️."""
-
-    # Calcular contadores reales leyendo el disco
-    imagenes = listar_imagenes(proyecto)
-    total_fotos = len(imagenes)
-
-    # Contar cuántas de esas fotos tienen versión optimizada
-    # Contar cuántas de esas fotos tienen versión optimizada
-    fotos_optimizadas = sum(
-        1 for img in imagenes if existe_version_optimizada(img, proyecto)
-    )
-
-    # Contar cuántas de esas fotos tienen certificado blockchain (Fase 5)
-    fotos_certificadas = sum(
-        1 for img in imagenes if existe_certificado(img, proyecto)
-    )
+    # Estado: confirmar borrado 
+    pendiente_borrar = st.session_state.get("proyecto_a_borrar")
 
     with st.container(border=True):
-        # 3 columnas: info | Abrir | 🗑️
-        col_info, col_abrir, col_borrar = st.columns([4, 1.2, 0.8])
+        if pendiente_borrar == proyecto_id:
+            # Modo confirmar borrado
+            st.warning(
+                f"⚠️ Vas a eliminar el proyecto **{proyecto['nombre']}**.\n\n"
+                f"Esta acción borrará TODO: fotos originales, optimizadas "
+                f"y certificados. **No se puede deshacer.**"
+            )
+            col_si, col_no = st.columns(2)
+            with col_si:
+                if st.button(
+                    "🗑️ Sí, eliminar todo",
+                    key=f"confirmar_eliminar_{proyecto_id}",
+                    use_container_width=True,
+                ):
+                    eliminar_proyecto_completo(proyecto, usuario_id)
+                    st.session_state.proyecto_a_borrar = None
+                    st.rerun()
+            with col_no:
+                if st.button(
+                    "Cancelar",
+                    key=f"cancelar_eliminar_{proyecto_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state.proyecto_a_borrar = None
+                    st.rerun()
+            return
+
+        # ----- Modo normal: mostrar tarjeta -----
+        col_info, col_abrir, col_borrar = st.columns([4, 1, 1])
 
         with col_info:
-            st.markdown(f"### 🏠 {proyecto['nombre']}")
-            estado = (
-                f"📷 {total_fotos} fotos &nbsp;·&nbsp; "
-                f"✨ {fotos_optimizadas} optimizadas &nbsp;·&nbsp; "
-                f"🔐 {fotos_certificadas} certificadas"
+            st.markdown(f"#### 🏠 {proyecto['nombre']}")
+
+            # Contadores en tiempo real
+            imagenes = listar_imagenes(proyecto)
+            total = len(imagenes)
+            opt = sum(
+                1 for img in imagenes if existe_version_optimizada(img, proyecto)
             )
+            cert = sum(
+                1 for img in imagenes if existe_certificado(img, proyecto)
+            )
+
             st.markdown(
-                f"<p style='color: #7F8C8D; font-size: 0.95rem;'>{estado}</p>",
-                unsafe_allow_html=True,
+                f"📷 {total} fotos · ✨ {opt} optimizadas · 🔐 {cert} certificadas"
             )
 
         with col_abrir:
-            st.write("")  # Espacio para alinear con el título
-            if st.button("Abrir", key=f"abrir_{proyecto['id']}"):
-                st.session_state.proyecto_actual = proyecto["id"]
+            if st.button(
+                "Abrir",
+                key=f"abrir_{proyecto_id}",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.proyecto_actual = proyecto_id
                 st.session_state.pagina = "galeria"
                 st.rerun()
 
         with col_borrar:
-            st.write("")
-            if st.button("🗑️", key=f"borrar_{proyecto['id']}"):
-                # Marcamos este proyecto como pendiente de confirmar
-                st.session_state.proyecto_a_borrar = proyecto["id"]
+            if st.button(
+                "🗑️",
+                key=f"borrar_{proyecto_id}",
+                use_container_width=True,
+            ):
+                st.session_state.proyecto_a_borrar = proyecto_id
                 st.rerun()
 
 
-def mostrar_tarjeta_modo_borrar(proyecto):
-    """Tarjeta en modo confirmación: muestra aviso y botones Confirmar/Cancelar."""
-
-    with st.container(border=True):
-        st.markdown(f"### 🗑️ Eliminar **{proyecto['nombre']}**")
-
-        st.warning(
-            "⚠️ ¿Borrar este proyecto y **todas sus fotos**? "
-            "Esta acción no se puede deshacer."
-        )
-
-        # Dos columnas: Confirmar | Cancelar
-        col_confirmar, col_cancelar = st.columns(2)
-
-        with col_confirmar:
-            if st.button(
-                "🗑️ Confirmar borrado",
-                key=f"confirmar_borrar_{proyecto['id']}",
-            ):
-                eliminar_proyecto_completo(proyecto)
-
-        with col_cancelar:
-            if st.button(
-                "Cancelar",
-                key=f"cancelar_borrar_{proyecto['id']}",
-            ):
-                st.session_state.proyecto_a_borrar = None
-                st.rerun()
-
-
-def eliminar_proyecto_completo(proyecto):
+def eliminar_proyecto_completo(proyecto, usuario_id):
     """
-    Elimina un proyecto del todo:
-      1. Borra la carpeta con sus fotos del disco.
-      2. Quita el proyecto de la lista en session_state.
-      3. Limpia el estado de confirmación.
-      4. Recarga la pantalla.
+    Elimina un proyecto completo:
+      - Borra la entrada de la base de datos.
+      - Borra la carpeta del proyecto en disco (con todas las fotos,
+        optimizadas y certificados).
+
+    Solo se ejecuta si el proyecto pertenece al usuario.
     """
-   # 1. Borrar la carpeta del disco (con todas las fotos dentro)
-    ruta_carpeta = carpeta_proyecto(proyecto)
-    if ruta_carpeta.exists():
-        shutil.rmtree(ruta_carpeta)
+    proyecto_id = proyecto["id"]
 
-    # 2. Quitar el proyecto de la lista en memoria
-    st.session_state.proyectos = [
-        p for p in st.session_state.proyectos
-        if p["id"] != proyecto["id"]
-    ]
+    #  1. Verificación de propiedad 
+    proyecto_validado = obtener_proyecto(proyecto_id, usuario_id)
+    if proyecto_validado is None:
+        st.error("No tienes permiso para eliminar este proyecto.")
+        return
 
-    # 3. Limpiar el estado de confirmación
-    st.session_state.proyecto_a_borrar = None
+    #  2. Borrar la carpeta del proyecto en disco 
+    try:
+        carpeta = carpeta_proyecto(proyecto_validado)
+        if carpeta.exists():
+            shutil.rmtree(carpeta)
+    except Exception as error:
+        st.warning(f"No se pudo borrar la carpeta en disco: {error}")
+        # Continuamos: al menos quitamos la entrada de la BD
 
-    # 4. Mensaje y recarga
-    st.success(f"Proyecto **{proyecto['nombre']}** eliminado correctamente.")
-    st.rerun()
+    #  3. Borrar la entrada de la BD 
+    eliminar_proyecto(proyecto_id, usuario_id)
+
+    st.success(f"✅ Proyecto **{proyecto_validado['nombre']}** eliminado.")

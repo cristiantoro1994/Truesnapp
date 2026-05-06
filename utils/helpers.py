@@ -40,6 +40,14 @@ def inicializar_estado():
     if "usuario_logueado" not in st.session_state:
         st.session_state.usuario_logueado = False
 
+    # Datos del usuario actual (Fase 6)
+    if "usuario_id" not in st.session_state:
+        st.session_state.usuario_id = None
+    if "usuario_email" not in st.session_state:
+        st.session_state.usuario_email = None
+    if "usuario_nombre" not in st.session_state:
+        st.session_state.usuario_nombre = None    
+
     if "email_usuario" not in st.session_state:
         st.session_state.email_usuario = ""
 
@@ -97,12 +105,16 @@ def mostrar_pagina_actual():
         certificado,
         descargas,
         nuevo_proyecto,
+        registro,
     )
 
     # Protección de acceso: si el usuario NO está logueado,
     # solo puede ver la pantalla de login.
     if not st.session_state.usuario_logueado:
-        login.mostrar()
+        if st.session_state.pagina == "registro":
+            registro.mostrar()
+        else:
+         login.mostrar()
         return
 
     # Si está logueado, mostramos la pantalla seleccionada
@@ -120,6 +132,8 @@ def mostrar_pagina_actual():
         descargas.mostrar()
     elif pagina == "nuevo_proyecto":
         nuevo_proyecto.mostrar()
+    elif pagina == "registro":
+        registro.mostrar()    
     else:
         # Si llega un nombre desconocido, volvemos al dashboard
         st.warning(f"Pantalla desconocida: '{pagina}'. Volviendo al dashboard.")
@@ -475,3 +489,34 @@ def guardar_comprobante(comprobante_bytes, ruta_imagen, proyecto):
         return True
     except OSError:
         return False
+    
+   
+# 8. CIERRE DE SESIÓN 
+
+
+def cerrar_sesion():
+    """
+    Cierra la sesión del usuario actual.
+
+    Limpia todas las variables relacionadas con el usuario y los
+    proyectos en memoria, y vuelve a la pantalla de login.
+
+    Es importante limpiar TODO para que el siguiente usuario que
+    inicie sesión no vea por error datos del usuario anterior.
+    """
+    import streamlit as st
+
+    # Vaciamos los datos del usuario
+    st.session_state.usuario_logueado = False
+    st.session_state.usuario_id = None
+    st.session_state.usuario_email = None
+    st.session_state.usuario_nombre = None
+
+    # Limpiamos cualquier referencia a proyectos del usuario anterior
+    st.session_state.proyecto_actual = None
+    st.session_state.proyecto_a_borrar = None
+    st.session_state.foto_a_borrar = None
+    st.session_state.foto_certificado = None
+
+    # Volvemos al login
+    st.session_state.pagina = "login"

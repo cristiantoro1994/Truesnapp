@@ -13,7 +13,7 @@ import streamlit as st
 # Importamos las funciones que creamos en otros archivos
 from utils.estilos import aplicar_estilos
 from utils.helpers import inicializar_estado, mostrar_pagina_actual
-
+from utils.base_datos import inicializar_base_datos
 
 # 1. Configuración general de la página
 
@@ -33,6 +33,9 @@ aplicar_estilos()
 
 
 # 3. Inicializar el estado de sesión
+
+# Inicializa la base de datos SQLite si aún no existe (Fase 6)
+inicializar_base_datos()
 
 # Crea las variables básicas (página actual, usuario, etc.) si no existen.
 inicializar_estado()

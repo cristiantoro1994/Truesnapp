@@ -1,104 +1,65 @@
-# Pantalla para crear un nuevo proyecto.
-# El usuario introduce el nombre del proyecto, y al confirmar:
-#   - Se crea la carpeta física en datos/imagenes/[nombre]/
-#   - Se añade el proyecto a la lista de st.session_state.proyectos
-#   - Se redirige a la galería del proyecto recién creado
+# Pantalla para crear un proyecto nuevo.
+# El proyecto se asocia automáticamente al usuario que está logueado
+# en ese momento, leyendo el usuario_id de la sesión.
+
 
 import streamlit as st
-import uuid
-import time
 
-# Importamos la función auxiliar que crea la carpeta del proyecto
-from utils.helpers import crear_carpeta_proyecto
+from utils.proyectos import crear_proyecto
 
 
 def mostrar():
-    """Muestra la pantalla de creación de un nuevo proyecto."""
+    """Muestra el formulario para crear un proyecto nuevo."""
 
-    # Botón de volver (arriba a la izquierda)
-    
     if st.button("← Volver al dashboard", key="volver_nuevo_proyecto"):
         st.session_state.pagina = "dashboard"
         st.rerun()
 
-    
-    # Título de la pantalla
-    
-    st.markdown("## ➕ Crear nuevo proyecto")
-
-    # Texto explicativo breve
+    st.markdown("# ➕ Nuevo proyecto")
     st.markdown(
-        "Dale un nombre a tu propiedad. Por ejemplo: "
-        "*Apartamento Centro, Casa de Playa, Loft Madrid.*"
+        "Crea un proyecto para organizar las fotos de un alojamiento. "
+        "Por ejemplo: *Casa de la Playa*, *Apartamento Centro*, etc."
     )
 
-    st.write("")  # Espacio en blanco
-    
-    # Formulario: nombre del proyecto
-    
+    st.markdown("---")
+
     nombre = st.text_input(
-        label="Nombre del proyecto",
-        placeholder="Ej: Apartamento Centro",
-        key="input_nombre_proyecto",
+        "Nombre del proyecto",
+        key="nuevo_proyecto_nombre",
+        placeholder="Ej: Casa Playa, Apartamento Centro...",
     )
 
-    st.write("")  # Espacio antes del botón
+    st.markdown("")
 
-   
-    # Botón principal: Crear proyecto
+    if st.button(
+        "Crear proyecto",
+        use_container_width=True,
+        type="primary",
+        key="boton_crear_proyecto",
+    ):
+        procesar_creacion(nombre)
 
-    if st.button("Crear proyecto", key="boton_crear_proyecto"):
-        crear_proyecto_nuevo(nombre)
 
+def procesar_creacion(nombre):
+    """Valida y crea el proyecto en la base de datos."""
 
-def crear_proyecto_nuevo(nombre):
-    """
-    Lógica para crear un proyecto nuevo:
-    valida → crea carpeta → guarda en estado → redirige a galería.
-    """
-
-    # ---- VALIDACIÓN 1: el nombre no puede estar vacío ----
-    if nombre.strip() == "":
-        st.error("Por favor, escribe un nombre para tu proyecto.")
+    usuario_id = st.session_state.get("usuario_id")
+    if usuario_id is None:
+        st.error("Debes iniciar sesión.")
         return
 
-    # ---- VALIDACIÓN 2: no puede haber dos proyectos con el mismo nombre ----
-    nombres_existentes = [
-        p["nombre"].lower() for p in st.session_state.get("proyectos", [])
-    ]
-    if nombre.strip().lower() in nombres_existentes:
-        st.error(
-            f"Ya tienes un proyecto llamado **{nombre}**. "
-            "Elige otro nombre."
-        )
+    exito, resultado = crear_proyecto(usuario_id, nombre)
+
+    if not exito:
+        st.error(f"❌ {resultado}")
         return
 
-    # ---- CREAR EL DICCIONARIO DEL PROYECTO ----
-    nuevo_proyecto = {
-        "id": uuid.uuid4().hex[:8],   # ID único de 8 caracteres
-        "nombre": nombre.strip(),
-        "fotos_totales": 0,
-        "fotos_optimizadas": 0,
-        "fotos_certificadas": 0,
-        "fecha_creacion": time.strftime("%Y-%m-%d"),
-    }
+    # resultado es un diccionario con id, nombre, usuario_id
+    st.success(f"✅ Proyecto **{resultado['nombre']}** creado correctamente.")
 
-    # ---- CREAR LA CARPETA FÍSICA EN EL DISCO ----
-    # La carpeta se nombra con el ID único del proyecto, no con
-    # el nombre, para evitar colisiones cuando dos proyectos
-    # tengan el mismo nombre.
-    crear_carpeta_proyecto(nuevo_proyecto)
+    import time
+    time.sleep(0.8)
 
-    # Si la lista no existe todavía, la inicializamos vacía
-    if "proyectos" not in st.session_state:
-        st.session_state.proyectos = []
-
-    st.session_state.proyectos.append(nuevo_proyecto)
-
-    # ---- REDIRIGIR A LA GALERÍA DEL NUEVO PROYECTO ----
-    st.session_state.proyecto_actual = nuevo_proyecto["id"]
-    st.session_state.pagina = "galeria"
-
-    # Mensaje de éxito (se ve un instante antes de redirigir)
-    st.success(f"✅ Proyecto **{nombre}** creado correctamente.")
+    # Volvemos al dashboard
+    st.session_state.pagina = "dashboard"
     st.rerun()

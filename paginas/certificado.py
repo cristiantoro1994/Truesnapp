@@ -62,17 +62,23 @@ def mostrar():
 
 
 def obtener_proyecto_actual():
-    """Busca en la lista el proyecto seleccionado."""
-    proyecto_id = st.session_state.get("proyecto_actual", None)
+    """
+    Devuelve el proyecto seleccionado, verificando que pertenezca al
+    usuario logueado.
 
-    if proyecto_id is None:
+    Si el usuario intenta acceder a un proyecto que no es suyo (por
+    ejemplo, manipulando el estado), devolvemos None y la galería
+    redirigirá al dashboard.
+    """
+    from utils.proyectos import obtener_proyecto
+
+    proyecto_id = st.session_state.get("proyecto_actual")
+    usuario_id = st.session_state.get("usuario_id")
+
+    if proyecto_id is None or usuario_id is None:
         return None
 
-    for p in st.session_state.get("proyectos", []):
-        if p["id"] == proyecto_id:
-            return p
-
-    return None
+    return obtener_proyecto(proyecto_id, usuario_id)
 
 
 def mostrar_detalles_certificado(ruta_foto, proyecto):

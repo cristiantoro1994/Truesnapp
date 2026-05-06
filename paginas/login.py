@@ -1,94 +1,109 @@
+# =====================================================================
+# paginas/login.py
+# =====================================================================
 # Pantalla de inicio de sesión de TrueSnapp.
+#
+# Validamos las credenciales contra la base de datos:
+#   - Solo usuarios registrados pueden entrar.
+#   - La contraseña se compara contra el hash bcrypt guardado.
+#   - Los datos del usuario quedan en st.session_state para que
+#     todas las demás pantallas sepan QUIÉN es el usuario actual.
+# =====================================================================
 
 import streamlit as st
 
+from utils.usuarios import autenticar_usuario
+
 
 def mostrar():
-    """Muestra la pantalla de login."""
+    """Muestra el formulario de inicio de sesión."""
 
-
-    # Cabecera: logo y título
-    
-    # Centramos el contenido usando columnas (la del medio es más ancha)
-    columna_izq, columna_centro, columna_der = st.columns([1, 3, 1])
-
-    with columna_centro:
-        # Título grande con el logo emoji
-        st.markdown(
-            "<h1 style='text-align: center; font-size: 2.5rem;'>📸 TrueSnapp</h1>",
-            unsafe_allow_html=True,
-        )
-
-        # Subtítulo descriptivo
-        st.markdown(
-            "<p style='text-align: center; color: #7F8C8D; font-size: 1rem;'>"
-            "Optimiza y certifica las fotos de tu alojamiento"
-            "</p>",
-            unsafe_allow_html=True,
-        )
-
-    # Espacio en blanco antes del formulario
-    st.write("")
-    st.write("")
-
-    
-    # Formulario de login
-    
-
-    # Campo de email
-    email = st.text_input(
-        label="Email",
-        placeholder="tu@email.com",
-        key="login_email",  # Identificador único para este campo
+    # ----- Cabecera con bienvenida -----
+    st.markdown("# 👋 Bienvenido a TrueSnapp")
+    st.markdown(
+        "Inicia sesión para acceder a tus proyectos de fotografía."
     )
 
-    # Campo de contraseña (con asteriscos)
-    contrasena = st.text_input(
-        label="Contraseña",
-        type="password",
-        placeholder="••••••••",
-        key="login_contrasena",
-    )
-
-    # Pequeño espacio antes del botón
-    st.write("")
-
-    # Botón principal: Entrar
-   
-    # Una sola acción principal por pantalla (filosofía TrueSnapp)
-    if st.button("Entrar", key="boton_entrar"):
-
-        # Validación mínima: que ambos campos tengan algo escrito
-        if email.strip() == "" or contrasena.strip() == "":
-            st.error("Por favor, completa tu email y contraseña.")
-        else:
-            # Guardamos en la "memoria" de la app que el usuario entró
-            st.session_state.usuario_logueado = True
-            st.session_state.email_usuario = email
-            # Cambiamos a la pantalla del dashboard
-            st.session_state.pagina = "dashboard"
-            # Recargamos la app para que se vea el cambio
-            st.rerun()
-
-    
-    # Enlace secundario: crear cuenta
-    
-    # Línea separadora
     st.markdown("---")
 
-    # Texto centrado con la opción de crear cuenta
-    columna_izq, columna_centro, columna_der = st.columns([1, 2, 1])
-    with columna_centro:
-        st.markdown(
-            "<p style='text-align: center; color: #7F8C8D;'>"
-            "¿No tienes cuenta?"
-            "</p>",
-            unsafe_allow_html=True,
-        )
+    # ----- Formulario de login -----
+    email = st.text_input(
+        "Email",
+        key="login_email",
+        placeholder="tucorreo@ejemplo.com",
+    )
 
-        # Botón secundario para crear cuenta (por ahora solo muestra aviso)
-        if st.button("Crear cuenta nueva", key="boton_crear_cuenta"):
-            st.info(
-                "🔧 La creación de cuentas se habilitará en la Fase 6 "
-                "(Base de datos)."
-            )
+    contrasena = st.text_input(
+        "Contraseña",
+        key="login_contrasena",
+        type="password",
+        placeholder="Tu contraseña",
+    )
+
+    st.markdown("")
+
+    # ----- Botón de iniciar sesión -----
+    if st.button(
+        "Iniciar sesión",
+        use_container_width=True,
+        type="primary",
+        key="boton_iniciar_sesion",
+    ):
+        procesar_login(email, contrasena)
+
+    st.markdown("---")
+
+    # ----- Enlace para crear cuenta nueva -----
+    st.markdown(
+        "<p style='text-align: center; color: #7F8C8D; "
+        "font-size: 0.9rem; margin: 0.6rem 0 0.3rem 0;'>"
+        "¿Aún no tienes cuenta?</p>",
+        unsafe_allow_html=True,
+    )
+
+    if st.button(
+        "🆕 Crear cuenta nueva",
+        use_container_width=True,
+        key="boton_ir_a_registro",
+    ):
+        st.session_state.pagina = "registro"
+        st.rerun()
+
+
+def procesar_login(email, contrasena):
+    """
+    Procesa el intento de login validando contra la base de datos.
+
+    Llama a autenticar_usuario(), que:
+      1. Busca el usuario por email en la BD.
+      2. Compara la contraseña con el hash bcrypt guardado.
+      3. Si todo OK, devuelve los datos del usuario.
+
+    Si hay éxito, guardamos los datos en session_state y vamos al dashboard.
+    Si hay error, mostramos un mensaje genérico (sin revelar si el email
+    existe o no, por seguridad).
+    """
+    # Validaciones rápidas antes de tocar la BD
+    if not email or not contrasena:
+        st.error("Introduce email y contraseña.")
+        return
+
+    # Llamamos al módulo de usuarios para autenticar contra la BD
+    exito, resultado = autenticar_usuario(email, contrasena)
+
+    if not exito:
+        # resultado es un mensaje de error
+        st.error(f"❌ {resultado}")
+        return
+
+    # ----- Login correcto: guardamos los datos del usuario -----
+    # resultado es un diccionario con id, email, nombre
+    st.session_state.usuario_logueado = True
+    st.session_state.usuario_id = resultado["id"]
+    st.session_state.usuario_email = resultado["email"]
+    st.session_state.usuario_nombre = resultado["nombre"]
+
+    # Limpiamos cualquier estado heredado de sesiones anteriores
+    st.session_state.pagina = "dashboard"
+
+    st.rerun()

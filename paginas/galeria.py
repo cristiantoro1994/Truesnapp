@@ -1,13 +1,19 @@
+# =====================================================================
+# paginas/galeria.py
+# =====================================================================
 # Galería de imágenes de un proyecto.
+#
 # El usuario puede:
 #   - Ver todas las fotos del proyecto en una rejilla
 #   - Subir nuevas fotos (desde móvil o escritorio)
 #   - Optimizar fotos con OpenCV + IA Real-ESRGAN (Fase 4)
+#   - Marca de agua "TrueSnapp" automática (Fase 6)
 #   - Comparar original/optimizada con slider deslizante
 #   - Re-optimizar (borra solo la versión optimizada y reprocesa)
 #   - Certificar fotos en blockchain (Fase 5)
 #   - Ver el certificado de las fotos ya certificadas
 #   - Eliminar fotos con doble confirmación
+# =====================================================================
 
 import streamlit as st
 from streamlit_image_comparison import image_comparison
@@ -31,6 +37,7 @@ from procesamiento.optimizar import (
     balancear_color,
     ajustar_brillo_contraste,
     mejorar_nitidez,
+    aplicar_marca_de_agua,
 )
 
 from procesamiento.optimizar_ia import (
@@ -94,17 +101,16 @@ def mostrar():
 
 
 def obtener_proyecto_actual():
-    """Busca en la lista el proyecto seleccionado."""
-    proyecto_id = st.session_state.get("proyecto_actual", None)
+    """Devuelve el proyecto seleccionado, verificando propiedad."""
+    from utils.proyectos import obtener_proyecto
 
-    if proyecto_id is None:
+    proyecto_id = st.session_state.get("proyecto_actual")
+    usuario_id = st.session_state.get("usuario_id")
+
+    if proyecto_id is None or usuario_id is None:
         return None
 
-    for p in st.session_state.get("proyectos", []):
-        if p["id"] == proyecto_id:
-            return p
-
-    return None
+    return obtener_proyecto(proyecto_id, usuario_id)
 
 
 def procesar_archivos_subidos(archivos_subidos, proyecto):
@@ -150,20 +156,7 @@ def mostrar_rejilla_imagenes(imagenes, proyecto):
 
 
 def mostrar_miniatura_completa(ruta_imagen, proyecto):
-    """
-    Muestra una miniatura de la imagen + botones de acción.
-
-    Si la foto NO está optimizada:
-      - Muestra la original.
-      - Botón "✨ Optimizar" + "🗑️ Borrar".
-
-    Si la foto SÍ está optimizada:
-      - Muestra slider Original / Optimizada.
-      - Indicador "✅ Optimizada".
-      - Si NO está certificada: botón "🔐 Certificar".
-      - Si SÍ está certificada: botón "🔐 Ver certificado".
-      - Botón "🔄 Re-optimizar" + "🗑️ Borrar".
-    """
+    """Muestra una miniatura de la imagen + botones de acción."""
     id_foto = str(ruta_imagen)
 
     foto_pendiente = st.session_state.get("foto_a_borrar", None)
@@ -213,7 +206,6 @@ def mostrar_miniatura_completa(ruta_imagen, proyecto):
         certificada = existe_certificado(ruta_imagen, proyecto)
 
         if certificada:
-            # Botón clicable que lleva a la pantalla del certificado
             if st.button(
                 "🔐 Ver certificado",
                 key=f"vercertificado_{id_foto}",
@@ -239,18 +231,20 @@ def mostrar_miniatura_completa(ruta_imagen, proyecto):
 
 def optimizar_foto(ruta_imagen, proyecto):
     """
-    Pipeline híbrido: OpenCV (siempre) + Real-ESRGAN (si hay clave).
+    Pipeline híbrido completo:
+      Capa 1: OpenCV (siempre)
+      Capa 2: Real-ESRGAN (si hay clave Replicate)
+      Capa 3: Marca de agua TrueSnapp (siempre, al final)
     """
     import time
 
     ruta_destino = ruta_imagen_optimizada(ruta_imagen, proyecto)
+    ruta_intermedia = ruta_imagen_optimizada(ruta_imagen, proyecto)
 
     usar_ia = hay_clave_replicate()
 
     contenedor_mensaje = st.empty()
     barra_progreso = st.progress(0)
-
-    ruta_intermedia = ruta_imagen_optimizada(ruta_imagen, proyecto)
 
     try:
         contenedor_mensaje.info("🧹 Limpiando ruido de la imagen...")
@@ -262,29 +256,29 @@ def optimizar_foto(ruta_imagen, proyecto):
             return
 
         imagen = reducir_ruido(imagen)
-        barra_progreso.progress(25 if usar_ia else 35)
+        barra_progreso.progress(20 if usar_ia else 30)
         time.sleep(0.2)
 
         contenedor_mensaje.info("🎨 Equilibrando los colores...")
         imagen = balancear_color(imagen)
-        barra_progreso.progress(40 if usar_ia else 55)
+        barra_progreso.progress(35 if usar_ia else 45)
         time.sleep(0.2)
 
         contenedor_mensaje.info("💡 Mejorando la iluminación...")
         imagen = ajustar_brillo_contraste(imagen)
-        barra_progreso.progress(50 if usar_ia else 75)
+        barra_progreso.progress(45 if usar_ia else 65)
         time.sleep(0.2)
 
         contenedor_mensaje.info("🔪 Realzando los detalles...")
         imagen = mejorar_nitidez(imagen)
-        barra_progreso.progress(60 if usar_ia else 90)
+        barra_progreso.progress(55 if usar_ia else 80)
         time.sleep(0.2)
 
         if usar_ia:
             guardar_imagen_cv(imagen, ruta_intermedia)
 
             contenedor_mensaje.info("🤖 Aplicando IA profesional (Real-ESRGAN)...")
-            barra_progreso.progress(75)
+            barra_progreso.progress(70)
 
             imagen_ia = optimizar_con_ia(ruta_intermedia)
 
@@ -297,8 +291,14 @@ def optimizar_foto(ruta_imagen, proyecto):
                     "Se usará el resultado de la optimización clásica."
                 )
 
-            barra_progreso.progress(90)
+            barra_progreso.progress(85)
             time.sleep(0.4)
+
+        # ----- Marca de agua "TrueSnapp" (Fase 6 - Paso 7) -----
+        contenedor_mensaje.info("🏷️ Aplicando marca de agua TrueSnapp...")
+        imagen = aplicar_marca_de_agua(imagen)
+        barra_progreso.progress(95)
+        time.sleep(0.2)
 
         contenedor_mensaje.info("💾 Guardando la versión optimizada...")
         guardar_imagen_cv(imagen, ruta_destino)
