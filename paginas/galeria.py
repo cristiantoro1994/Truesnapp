@@ -1,8 +1,4 @@
-# =====================================================================
-# paginas/galeria.py
-# =====================================================================
 # Galería de imágenes de un proyecto.
-#
 # El usuario puede:
 #   - Ver todas las fotos del proyecto en una rejilla
 #   - Subir nuevas fotos (desde móvil o escritorio)
@@ -12,8 +8,7 @@
 #   - Re-optimizar (borra solo la versión optimizada y reprocesa)
 #   - Certificar fotos en blockchain (Fase 5)
 #   - Ver el certificado de las fotos ya certificadas
-#   - Eliminar fotos con doble confirmación
-# =====================================================================
+#   - Eliminar fotos con doble confirmación# 
 
 import streamlit as st
 from streamlit_image_comparison import image_comparison
@@ -72,8 +67,16 @@ def mostrar():
 
     st.markdown(f"## 🏠 {proyecto['nombre']}")
 
-    st.markdown("### 📤 Subir fotos")
+    # Botón de acceso a la pantalla de descargas (Fase 7)
+    if st.button(
+        "📦 Descargar proyecto completo",
+        key="ir_a_descargas",
+        use_container_width=True,
+    ):
+        st.session_state.pagina = "descargas"
+        st.rerun()
 
+    st.markdown("### 📤 Subir fotos")
     archivos_subidos = st.file_uploader(
         label="Arrastra tus fotos aquí o pulsa para seleccionarlas",
         type=["jpg", "jpeg", "png"],
@@ -218,10 +221,13 @@ def mostrar_miniatura_completa(ruta_imagen, proyecto):
             if st.button("🔐 Certificar", key=f"certificar_{id_foto}"):
                 certificar_foto(ruta_imagen, proyecto)
 
+        # Botón de descarga individual (Fase 7)
+        descargar_foto_individual(ruta_imagen, proyecto, id_foto)
+
         if st.button("🔄 Re-optimizar", key=f"reoptimizar_{id_foto}"):
             reoptimizar_foto(ruta_imagen, proyecto)
-    else:
-        if st.button("✨ Optimizar", key=f"optimizar_{id_foto}"):
+        else:
+         if st.button("✨ Optimizar", key=f"optimizar_{id_foto}"):
             optimizar_foto(ruta_imagen, proyecto)
 
     if st.button("🗑️ Borrar", key=f"borrar_{id_foto}"):
@@ -411,6 +417,50 @@ def eliminar_foto_completa(ruta_imagen, proyecto):
 
     st.session_state.foto_a_borrar = None
     st.rerun()
+
+def descargar_foto_individual(ruta_imagen, proyecto, id_foto):
+    """
+    Muestra un botón para descargar la versión optimizada de la foto.
+
+    La descarga incluye la marca de agua TrueSnapp aplicada en la
+    Fase 6, ya que se descarga el archivo guardado en disco
+    (no la versión sin marca).
+
+    Si la foto no tiene versión optimizada, no aparece el botón.
+    """
+    ruta_optimizada = ruta_imagen_optimizada(ruta_imagen, proyecto)
+
+    # Solo mostramos el botón si existe la versión optimizada
+    if not ruta_optimizada.exists():
+        return
+
+    # Leemos el archivo como bytes
+    try:
+        contenido_bytes = ruta_optimizada.read_bytes()
+    except OSError:
+        return
+
+    # Calculamos el nombre del archivo a descargar (sin el ID interno)
+    nombre_descarga = quitar_id_del_nombre(ruta_optimizada.name)
+
+    # Determinamos el tipo MIME según la extensión
+    extension = ruta_optimizada.suffix.lower()
+    if extension in (".jpg", ".jpeg"):
+        mime_type = "image/jpeg"
+    elif extension == ".png":
+        mime_type = "image/png"
+    else:
+        mime_type = "application/octet-stream"
+
+    # Botón de descarga
+    st.download_button(
+        label="📥 Descargar",
+        data=contenido_bytes,
+        file_name=nombre_descarga,
+        mime=mime_type,
+        key=f"descargar_{id_foto}",
+        use_container_width=True,
+    )
 
 
 def quitar_id_del_nombre(nombre_archivo):
